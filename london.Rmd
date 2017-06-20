@@ -1,0 +1,118 @@
+---
+title: "london"
+author: "JustinJDavies"
+date: "19 June 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(rstan)
+library(dplyr)
+library(ggplot2)
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+```
+
+## Dataset
+
+We have a response variable showing the total quotes per enquiry from a popular online price comparison website, grouped by London postcodes. A (not particularly) sample of (up to) 100 records for each London postcode district have been selected as a development dataset. Some postcode districts have fewer than 100 quotes in total.
+
+```{r dataset}
+d <- read.delim2('londonPostQuote', header = T)
+
+summary(d %>% select(PostcodeArea, Quotes))
+
+result <-   
+    d %>% 
+    group_by(PostcodeArea) %>% 
+    mutate(pc2 = dense_rank(PostcodeOutward)) %>%
+    mutate(pc1 = as.numeric(PostcodeArea)) %>% 
+    ungroup() 
+
+```
+
+## Summary Plots
+
+### Spatial plot (TODO)
+
+<Place-holder for a map of London, coloured by postcode district>
+https://cran.r-project.org/doc/contrib/intro-spatial-rl.pdf
+
+### Total Quotes
+
+It is possible that there is a systematic discrimination bewteen the quotability (number of quotes per enquiry) for each Postcode Area.
+
+```{r postcode area, echo=FALSE}
+boxplot(
+    Quotes ~ PostcodeArea,
+    data = result,
+    notch = TRUE,
+    col = (RColorBrewer::brewer.pal(n = max(unique(result$pc1)), name = "Set3"))
+)
+abline(h = mean(result$Quotes), col = "red")
+title("Postcode District Average Quotes per Enquiry, grouped by Postcode Area")
+```
+
+It is not clear if this is driven by indiviual Postcode Districts.
+
+```{r postcode district, echo=FALSE}
+
+# See https://stackoverflow.com/questions/33221794/separate-palettes-for-facets-in-ggplot-facet-grid for charting tips & tricks
+    areaAvgs <- result %>% group_by(PostcodeArea) %>% summarize(m = mean(Quotes))
+    overallAvg <- result %>% summarize(m = mean(Quotes))
+
+    ggplot(result, aes(fill=as.factor(pc1), x=as.factor(pc2), y=Quotes, group=pc2)) + 
+    geom_boxplot() +
+    geom_hline(data = areaAvgs, aes(yintercept = m), color="black", linetype="solid") +
+    geom_hline(data = overallAvg, aes(yintercept = m), color="red", linetype="dashed") +
+    scale_fill_manual(values = RColorBrewer::brewer.pal(n = 8, name = "Set3"), guide="none") +
+    facet_wrap(~ PostcodeArea, ncol = 3) +
+    ggtitle("QPE by Postcode District, faceted by Postcode Area") +
+    theme(
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()
+        )
+
+```
+
+## Model form
+
+What is the best option for modelling the expected quotability of an enquiry, given the postcode area and district?
+
+### Simple GLM
+
+Indications from GLM analysis suggest that there are significant trends at both the Postcode Area and Postcode District level.
+
+```{r simple glm, echo=TRUE}
+g <- glm(
+        formula = Quotes ~ PostcodeArea, 
+        family = poisson(link = "log"),
+        data = result
+        )
+
+summary(g)
+
+```
+
+If we fit (overfit) every postcode district, we can see that some are liklely significantly discriminated and some are not.
+
+```{r overfit glm, echo=TRUE}
+g <- glm(
+        formula = Quotes ~ PostcodeOutward, 
+        family = poisson(link = "log"),
+        data = result
+        )
+
+summary(g)
+
+```
+
+How can we automatically balance between these two without extensive manual selection of postcode District parameters?
+
+# stan ????
+
