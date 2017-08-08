@@ -114,5 +114,83 @@ summary(g)
 
 How can we automatically balance between these two without extensive manual selection of postcode District parameters?
 
+# lasso ???
+```{r lasso}
+    # based on answer in https://stats.stackexchange.com/questions/72251/an-example-lasso-regression-using-glmnet-for-binary-outcome
+library(glmnet)
+xfactors <- model.matrix(object = Quotes ~ PostcodeArea, data = result)
+x <- as.matrix(data.frame(xfactors))
+
+# Note alpha=1 for lasso only and can blend with ridge penalty down to alpha=0 .. ridge only
+glmmod <- glmnet(x = x, y = result$Quotes, alpha=1, family="poisson")
+
+# Plot variable coefficients vs. shrinkage parameter lambda
+plot(glmmod, xvar="lambda")
+
+
+```
+
+```{r lasso with postcode district}
+    # based on answer in https://stats.stackexchange.com/questions/72251/an-example-lasso-regression-using-glmnet-for-binary-outcome
+library(glmnet)
+xfactors <- model.matrix(object = Quotes ~ PostcodeOutward, data = result)
+x <- as.matrix(data.frame(xfactors))
+
+# Note alpha=1 for lasso only and can blend with ridge penalty down to alpha=0 .. ridge only
+glmmod <- glmnet(x = x, y = result$Quotes, alpha=1, family="poisson")
+plot(glmmod, xvar="lambda")
+
+glmmod <- glmnet(x = x, y = result$Quotes, alpha=0.5, family="poisson")
+plot(glmmod, xvar="lambda")
+
+glmmod <- glmnet(x = x, y = result$Quotes, alpha=0, family="poisson")
+plot(glmmod, xvar="lambda")
+
+```
+
+
+```{r cross-validation}
+# Plot variable coefficients vs. shrinkage parameter lambda
+
+
+cv.glmmod <-
+    cv.glmnet(
+    x = x,
+    y = result$Quotes,
+    alpha = 1,
+    family = "poisson"
+    )
+
+plot(cv.glmmod)
+(best.lambda <- cv.glmmod$lambda.min)
+log(cv.glmmod$lambda.min)
+
+```
+
+
+```{r stan}
+ # can we implement the lasso in Stan?
+
+    # http://andrewgelman.com/2017/02/14/lasso-regression-etc-stan/
+    # https://groups.google.com/forum/#!topic/stan-dev/zI4uE5qIEjE
+    # https://github.com/stan-dev/stan/wiki/Prior-Choice-Recommendations
+    # http://andrewgelman.com/2015/02/17/bayesian-survival-analysis-horseshoe-priors/
+
+    #
+    
+
+    stan.model <- 
+    "
+    parameters {
+        real y;
+        }
+        model {
+        y ~ poisson(1);
+        }
+    "
+
+    stan.model
+```
+
 # stan ????
 
