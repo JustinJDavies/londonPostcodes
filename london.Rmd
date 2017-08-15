@@ -24,14 +24,20 @@ We have a response variable showing the total quotes per enquiry from a popular 
 ```{r dataset}
 d <- read.delim2('londonPostQuote', header = T)
 
+cat("raw data\n")
 summary(d %>% select(PostcodeArea, Quotes))
 
+# Only using 2 binary levels, the minimal required  for hierachical model
 result <-   
     d %>% 
     group_by(PostcodeArea) %>% 
     mutate(pc2 = dense_rank(PostcodeOutward)) %>%
     mutate(pc1 = as.numeric(PostcodeArea)) %>% 
-    ungroup() 
+    ungroup() %>%
+    filter(pc1 < 3 & pc2 < 6)
+
+cat("sampled data\n")
+summary(result %>% select(PostcodeArea, Quotes))
 
 ```
 
@@ -88,109 +94,224 @@ What is the best option for modelling the expected quotability of an enquiry, gi
 
 Indications from GLM analysis suggest that there are significant trends at both the Postcode Area and Postcode District level.
 
-```{r simple glm, echo=TRUE}
-g <- glm(
+```{r simple glm postcode area, echo=TRUE}
+g_pca <- glm(
         formula = Quotes ~ PostcodeArea, 
         family = poisson(link = "log"),
         data = result
         )
 
-summary(g)
+plot(g_pca)
+summary(g_pca)
 
 ```
 
 If we fit (overfit) every postcode district, we can see that some are liklely significantly discriminated and some are not.
 
-```{r overfit glm, echo=TRUE}
-g <- glm(
+```{r glm postcode district, echo=TRUE}
+g_pcd <- glm(
         formula = Quotes ~ PostcodeOutward, 
         family = poisson(link = "log"),
         data = result
         )
 
-summary(g)
+suppressWarnings(plot(g_pcd)) # not plotting observations with leverage one:
+                          # 9864, 11265not plotting observations with leverage one:
+                          # 9864, 11265
+summary(g_pcd)
 
 ```
+
+It seems that EC1N may not be significant, and EC1V is also debatable. We want to use a model form that will automatically perform the regularisation.
 
 How can we automatically balance between these two without extensive manual selection of postcode District parameters?
 
-# lasso ???
-```{r lasso}
-    # based on answer in https://stats.stackexchange.com/questions/72251/an-example-lasso-regression-using-glmnet-for-binary-outcome
-library(glmnet)
-xfactors <- model.matrix(object = Quotes ~ PostcodeArea, data = result)
-x <- as.matrix(data.frame(xfactors))
+Conveniently, there are also eight London Postcode Areas. We will use the params from the GLM
 
-# Note alpha=1 for lasso only and can blend with ridge penalty down to alpha=0 .. ridge only
-glmmod <- glmnet(x = x, y = result$Quotes, alpha=1, family="poisson")
+```{r does stan work, echo=FALSE}
+nu <- g_pca$coefficients %>% as.numeric()
+nu_v <- sqrt(diag(vcov(g_pca))) %>% as.numeric()
 
-# Plot variable coefficients vs. shrinkage parameter lambda
-plot(glmmod, xvar="lambda")
+nu
+nu_v
+
+glm_param_dat <- list(J = 2, 
+                    y = nu,
+                    sigma = nu_v)
+
+fit <- stan(file = '8schools.stan', data = glm_param_dat, 
+            iter = 1000, chains = 4)
+
+plot(fit)
+```
+
+# Let's try Poisson GLM in stan...
+
+```{r stan fit Poisson glm, echo=FALSE}
+#https://github.com/stan-dev/stan/wiki/Prior-Choice-Recommendations
+
+sg1_y <- result$Quotes
+sg1_J <- length(sg1_y)
+sg1_X <- as.data.frame(model.matrix(g_pca))
+# sg1_X$PostcodeAreaE <- 1 - rowSums(sg1_X[,-1])
+
+
+names(sg1_X)
+
+sg1_dat <- list(J = sg1_J,
+                p = 1,
+                y = sg1_y,
+                intercept = sg1_X$`(Intercept)`,
+                # PostcodeAreaE = sg1_X$PostcodeAreaE,
+                PostcodeAreaEC = sg1_X$PostcodeAreaEC)
+                # PostcodeAreaN  = sg1_X$PostcodeAreaN,
+                # PostcodeAreaNW = sg1_X$PostcodeAreaNW,
+                # PostcodeAreaSE = sg1_X$PostcodeAreaSE,
+                # PostcodeAreaSW = sg1_X$PostcodeAreaSW,
+                # PostcodeAreaW  = sg1_X$PostcodeAreaW,
+                # PostcodeAreaWC = sg1_X$PostcodeAreaWC)
+
+fit <- stan(file = 'sg1_001_01.stan', data = sg1_dat,
+            iter = 50, chains = 8)
+
+# summary(fit, pars = c("alpha","beta"))
+plot(fit, pars = c("alpha","beta"))
+traceplot(fit, pars = c("alpha","beta"), inc_warmup = TRUE)
+```
+
+``` {r stan results }
+
+pairs(fit, pars = c("alpha","beta"))
 
 
 ```
 
-```{r lasso with postcode district}
-    # based on answer in https://stats.stackexchange.com/questions/72251/an-example-lasso-regression-using-glmnet-for-binary-outcome
-library(glmnet)
-xfactors <- model.matrix(object = Quotes ~ PostcodeOutward, data = result)
-x <- as.matrix(data.frame(xfactors))
 
-# Note alpha=1 for lasso only and can blend with ridge penalty down to alpha=0 .. ridge only
-glmmod <- glmnet(x = x, y = result$Quotes, alpha=1, family="poisson")
-plot(glmmod, xvar="lambda")
+# See Also
 
-glmmod <- glmnet(x = x, y = result$Quotes, alpha=0.5, family="poisson")
-plot(glmmod, xvar="lambda")
+## Stan case study on binomial trials
 
-glmmod <- glmnet(x = x, y = result$Quotes, alpha=0, family="poisson")
-plot(glmmod, xvar="lambda")
+Pooling with hierachical models for repated binomial trials
 
+
+## Mixed models
+
+Look into mixed models with stan glmm to save effort on composing the model definition.
+
+```{r stan fit Poisson glm, echo=FALSE}
+#https://github.com/stan-dev/stan/wiki/Prior-Choice-Recommendations
+
+sg1_y <- result$Quotes
+sg1_J <- length(sg1_y)
+sg1_X <- as.data.frame(model.matrix(g_pca))
+# sg1_X$PostcodeAreaE <- 1 - rowSums(sg1_X[,-1])
+
+
+names(sg1_X)
+
+sg1_dat <- list(J = sg1_J,
+                p = 1,
+                y = sg1_y,
+                intercept = sg1_X$`(Intercept)`,
+                PostcodeAreaEC = sg1_X$PostcodeAreaEC
+                )
+
+fit <- stan(file = 'sg1_001_02.stan', data = sg1_dat,
+            iter = 50, chains = 8)
+
+plot(fit, pars = c("alpha","beta"))
+traceplot(fit, pars = c("alpha","beta"), inc_warmup = TRUE)
 ```
 
+# Better data format
 
-```{r cross-validation}
-# Plot variable coefficients vs. shrinkage parameter lambda
+It is tiring to create a new param for each postcode group - let's map them to an integer "groupId".
 
+```{r data extraction}
 
-cv.glmmod <-
-    cv.glmnet(
-    x = x,
-    y = result$Quotes,
-    alpha = 1,
-    family = "poisson"
-    )
+# we want to summarise the data by postcodearea/district with average number of quotes per PCA and PCD
+# we can use x_mean PCD as the response
+# we can use x_mean PCA as a contextual effect (as per the Radon example)
 
-plot(cv.glmmod)
-(best.lambda <- cv.glmmod$lambda.min)
-log(cv.glmmod$lambda.min)
+summary(d)
 
-```
-
-
-```{r stan}
- # can we implement the lasso in Stan?
-
-    # http://andrewgelman.com/2017/02/14/lasso-regression-etc-stan/
-    # https://groups.google.com/forum/#!topic/stan-dev/zI4uE5qIEjE
-    # https://github.com/stan-dev/stan/wiki/Prior-Choice-Recommendations
-    # http://andrewgelman.com/2015/02/17/bayesian-survival-analysis-horseshoe-priors/
-
-    #
+data.010.raw <- d %>% 
+  group_by(PostcodeArea) %>% 
+    mutate(PCA_mean=mean(Quotes)) %>% # pca mean
+    mutate(PCA_badflags=mean(BadFlags)) %>% # pca x variate
+    mutate(PCA_count=n()) %>% ungroup() %>% # pca nobs
+  group_by(PostcodeOutward) %>% 
+    mutate(PCD_mean=mean(Quotes)) %>% # pcd mean - final response
+    mutate(PCD_badflags=mean(BadFlags)) %>% # pcd x variate
+    mutate(PCD_count=n()) %>% # pcd nobs
+  select(PostcodeArea, PostcodeOutward, PCA_count, PCA_mean, PCA_badflags, PCD_count, PCD_mean, PCD_badflags) %>%
+    unique() %>%
+    group_by(PostcodeArea) %>% 
+    mutate(pcaId = rank(PostcodeArea, ties.method = "first")) %>%
+    ungroup() %>%
+    group_by(PostcodeOutward) %>% 
+    mutate(pcdId = rank(PostcodeOutward, ties.method = "first")) %>%
+    ungroup() %>%
+    select(pcaId, pcdId, everything())
     
+  
+summary(data.010.raw)
+data.010.raw
 
-    stan.model <- 
-    "
-    parameters {
-        real y;
-        }
-        model {
-        y ~ poisson(1);
-        }
-    "
-
-    stan.model
 ```
 
-# stan ????
+Now implement the partial-pooling model from http://mc-stan.org/users/documentation/case-studies/radon.html#Varying-intercept-model using group-level predictor and contextual effects.
+
+## varying_intercept_slope stan model (no group effects)
+
+```{r intercept_slope}
+  # Fit using rn010_slopeIntercept.stan model
+
+  # Data : 
+data.010.stan.df <- data.010.raw %>% 
+    mutate(county = pcaId) %>% # group identifier
+    mutate(x = PCD_badflags) %>% # use the badflags as a prpxy for "Risk Index" for now
+    mutate(y = PCD_mean) %>%
+    select(county, x, y)
+
+  data.rn010.stan <- list(
+    N = nrow(data.010.stan.df),                   # number of observations
+    J = unique(data.010.raw$pcaId) %>% length(),           # number of groups
+    y = data.010.stan.df$y,                        # response
+    x = data.010.stan.df$x,                        # design vector
+    county = data.010.stan.df$county            # group
+    
+  )
+
+str(data.rn010.stan)
+# we'll use the average quotes per PCD for now ; going to granular data will be hardcore
+```
+
+Having prepared the data.... we fit the stan model
+
+```{r model fir}
+fit <-
+  stan(
+  file = 'rn010_slopeIntercept.stan',
+  data = data.rn010.stan,
+  iter = 500,
+  chains = 4,
+  control=list(adapt_delta=0.8)
+  )
+
+
+plot(fit, pars = c("a","b"))
+traceplot(fit, pars = c("a[1]"), inc_warmup = TRUE)
+traceplot(fit, pars = c("b[1]"), inc_warmup = TRUE)
+traceplot(fit, pars = c("a"), inc_warmup = TRUE)
+traceplot(fit, pars = c("b"), inc_warmup = TRUE)
+
+```
+
+Extract the param estimates, and score the original data.
+
+``` {r param estimation from stan fit}
+
+
+```
 
